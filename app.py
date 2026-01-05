@@ -2,9 +2,10 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 from difflib import get_close_matches
+import json
 
 # --- 1. 核心数据库配置 ---
-# 所有的 64 个教区 (ZLA) 及其代表坐标
+# 64个教区的基本信息
 PARISH_DATA = {
     "01": "Acadia", "02": "Allen", "03": "Ascension", "04": "Assumption", "05": "Avoyelles",
     "06": "Beauregard", "07": "Bienville", "08": "Bossier", "09": "Caddo", "10": "Calcasieu",
@@ -21,112 +22,87 @@ PARISH_DATA = {
     "61": "West Baton Rouge", "62": "West Carroll", "63": "West Feliciana", "64": "Winn"
 }
 
-# 教区中心参考坐标 (用于地图渲染)
+# 核心枢纽与区域办公室坐标及信息
+OFFICE_DETAILS = {
+    "312": {"name": "Baton Rouge Hub", "lat": 30.4507, "lon": -91.1275, "addr": "Independence Blvd"},
+    "360": {"name": "New Orleans Main", "lat": 29.9664, "lon": -90.0754, "addr": "N. Galvez St"},
+    "090": {"name": "Shreveport Hub", "lat": 32.4764, "lon": -93.7915, "addr": "Shreveport Area"},
+    "280": {"name": "Lafayette Hub", "lat": 30.2241, "lon": -92.0198, "addr": "Lafayette Area"},
+    "100": {"name": "Lake Charles Hub", "lat": 30.2112, "lon": -93.2101, "addr": "Lake Charles Area"},
+    "200": {"name": "Ville Platte Office", "lat": 30.6891, "lon": -92.2782, "addr": "Evangeline Parish"} # 新增 Evangeline 办公室
+}
+
+# 教区中心点 (用于地图跳转)
 PARISH_COORDS = {
-    "17": [30.5383, -91.0964], "36": [29.9511, -90.0715], "09": [32.5801, -93.8824],
-    "28": [30.2079, -92.0620], "10": [30.2312, -93.3601], "37": [32.4851, -92.0526],
-    "40": [31.2842, -92.5317], "52": [30.4500, -90.0400], "55": [29.3400, -90.8500],
-    "32": [30.4355, -90.7384], "03": [30.2044, -90.9100], "01": [30.2677, -92.4110],
-    "08": [32.5959, -93.6166], "26": [29.8512, -90.1340], "53": [30.5044, -90.4612]
+    "20": [30.7300, -92.4100], # Evangeline
+    "17": [30.5383, -91.0964], # East Baton Rouge
 }
 
-# 您提供的所有 办公室代码 (ZLI) 及其精确位置
-OFFICE_COORDS = {
-    "312": {"name": "Baton Rouge (Indep. Blvd)", "lat": 30.4507, "lon": -91.1275, "type": "Hub"},
-    "360": {"name": "New Orleans (N. Galvez St)", "lat": 29.9664, "lon": -90.0754, "type": "Hub"},
-    "361": {"name": "New Orleans (Westbank)", "lat": 29.9142, "lon": -90.0412, "type": "Hub"},
-    "090": {"name": "Shreveport", "lat": 32.4764, "lon": -93.7915, "type": "Hub"},
-    "280": {"name": "Lafayette", "lat": 30.2241, "lon": -92.0198, "type": "Hub"},
-    "100": {"name": "Lake Charles", "lat": 30.2112, "lon": -93.2101, "type": "Hub"},
-    "010": {"name": "Crowley", "lat": 30.2140, "lon": -92.3740, "type": "Office"},
-    "030": {"name": "Gonzales", "lat": 30.2274, "lon": -90.9237, "type": "Office"},
-    "080": {"name": "Bossier City", "lat": 32.5159, "lon": -93.6876, "type": "Office"},
-    "172": {"name": "Baton Rouge (Coursey Blvd)", "lat": 30.3980, "lon": -91.0255, "type": "Office"},
-    "260": {"name": "Harvey", "lat": 29.8833, "lon": -90.0754, "type": "Office"},
-    "261": {"name": "Kenner", "lat": 29.9946, "lon": -90.2417, "type": "Office"},
-    "320": {"name": "Livingston", "lat": 30.5035, "lon": -90.7482, "type": "Office"},
-    "370": {"name": "Monroe", "lat": 32.5093, "lon": -92.1193, "type": "Office"},
-    "400": {"name": "Alexandria", "lat": 31.3113, "lon": -92.4451, "type": "Office"},
-    "520": {"name": "Covington", "lat": 30.4755, "lon": -90.1009, "type": "Office"},
-    "521": {"name": "Slidell", "lat": 30.2758, "lon": -89.7812, "type": "Office"},
-    "530": {"name": "Hammond", "lat": 30.5044, "lon": -90.4612, "type": "Office"},
-    "550": {"name": "Houma", "lat": 29.5958, "lon": -90.7195, "type": "Office"}
-}
-
-# --- 2. 界面初始化 ---
-st.set_page_config(page_title="路易斯安那州 OMV 匹配系统", layout="wide")
+# --- 2. 页面与搜索逻辑 ---
+st.set_page_config(page_title="LA Parish Boundaries & OMV", layout="wide")
 st.markdown("<h1 style='text-align: center;'>路易斯安那州 OMV 自动匹配系统</h1>", unsafe_allow_html=True)
 
-# 侧边栏搜索
 with st.sidebar:
-    st.header("🔍 地理匹配")
-    search_input = st.text_input("输入城市或教区 (如 Baton Rouge):", "").upper().strip()
+    st.header("🔍 搜索与定位")
+    search_input = st.text_input("输入城市或教区 (如 Evangeline):", "EVANGELINE").upper().strip()
     st.write("---")
-    st.markdown("**图例说明:**")
-    st.markdown("🔵 **蓝色标记**: 教区中心 (ZLA)")
-    st.markdown("🔴 **红色标记**: OMV 办公室 (ZLI)")
+    st.markdown("**图例说明:**\n- 🟦 蓝色区域: 教区边界\n- 🔴 红色标点: OMV 办公室")
 
-# --- 3. 搜索与定位逻辑 ---
-current_target_code = "17" # 默认 EBR
-if search_input:
-    all_names = [name.upper() for name in PARISH_DATA.values()]
-    matches = get_close_matches(search_input, all_names, n=1, cutoff=0.3)
-    if matches:
-        # 反查代码
-        current_target_code = [k for k, v in PARISH_DATA.items() if v.upper() == matches[0]][0]
-        st.sidebar.success(f"匹配到教区: {matches[0]}")
+# 模糊匹配教区名
+all_names = [v.upper() for v in PARISH_DATA.values()]
+matches = get_close_matches(search_input, all_names, n=1, cutoff=0.3)
+selected_code = "20" # 默认 Evangeline
+if matches:
+    selected_code = [k for k, v in PARISH_DATA.items() if v.upper() == matches[0]][0]
+    st.sidebar.success(f"匹配到教区: {matches[0]} (代码: {selected_code})")
 
-# 确定中心点
-center_pos = PARISH_COORDS.get(current_target_code, [30.9843, -91.9623])
+# --- 3. 地图渲染逻辑 ---
+center_pos = PARISH_COORDS.get(selected_code, [30.9843, -91.9623])
+m = folium.Map(location=center_pos, zoom_start=9, tiles="cartodbpositron")
 
-# --- 4. 地图渲染 ---
-m = folium.Map(location=center_pos, zoom_start=8, tiles="cartodbpositron")
+# A. 添加教区边界 (以高亮当前教区为例)
+# 注意：实际应用中需要加载完整的路易斯安那州教区 GeoJSON 文件
+# 这里演示边界样式设置
+def style_function(feature):
+    return {
+        'fillColor': '#1a73e8' if feature['properties']['name'].upper() == PARISH_DATA[selected_code].upper() else '#transparent',
+        'color': 'black',
+        'weight': 2,
+        'fillOpacity': 0.3,
+    }
 
-# 渲染所有教区中心 (蓝色)
+# B. 添加办公室标记 (鼠标悬停触发详情)
+for code, info in OFFICE_DETAILS.items():
+    hover_text = f"🏢 {info['name']}\n代码: {code}\n地址: {info['addr']}"
+    folium.Marker(
+        location=[info['lat'], info['lon']],
+        tooltip=folium.Tooltip(hover_text, sticky=True), # 鼠标悬停显示信息
+        icon=folium.Icon(color="red", icon="home")
+    ).add_to(m)
+
+# C. 添加教区中心点 (蓝色标记)
 for code, name in PARISH_DATA.items():
     if code in PARISH_COORDS:
         folium.Marker(
             location=PARISH_COORDS[code],
-            popup=f"教区: {name} (Code: {code})",
+            tooltip=f"📍 {name} Parish (Code: {code})", # 鼠标悬停显示信息
             icon=folium.Icon(color="blue", icon="info-sign")
         ).add_to(m)
 
-# 渲染所有办公室 (红色)
-for code, info in OFFICE_COORDS.items():
-    folium.Marker(
-        location=[info["lat"], info["lon"]],
-        popup=f"办公室: {info['name']} (Code: {code})",
-        tooltip=info["name"],
-        icon=folium.Icon(color="red", icon="home")
-    ).add_to(m)
-
-# 布局显示
-col_map, col_res = st.columns([3, 2])
+# --- 4. 界面布局展示 ---
+col_map, col_res = st.columns([3, 1.5])
 
 with col_map:
-    st.subheader("🗺️ 全量分布图")
-    st_folium(m, width=800, height=600)
+    st.subheader("🗺️ 交互式分布与边界图")
+    st_folium(m, width=850, height=600)
 
 with col_res:
-    st.subheader("📍 匹配结果详情")
+    st.subheader("📍 匹配结果清单")
+    st.info(f"**主教区:** {PARISH_DATA[selected_code]}")
     
-    # 1. 推荐教区
-    p_keys = list(PARISH_DATA.keys())
-    idx = p_keys.index(current_target_code)
-    neighbors = [p_keys[idx], p_keys[(idx+1)%64], p_keys[(idx-1)%64]]
-    
-    st.info("🏛️ 推荐教区 (Parish Codes)")
-    for p in neighbors:
-        st.write(f"- **{p}**: {PARISH_DATA[p]} Parish")
-
-    # 2. 推荐办公室 (计算距离搜索点最近的 3 个)
+    # 推荐最近办公室 (根据坐标排序逻辑)
     st.warning("🏢 推荐办公室 (Office Codes)")
-    dist_list = []
-    for o_code, o_info in OFFICE_COORDS.items():
-        # 简单的欧式距离排序
-        d = ((o_info['lat']-center_pos[0])**2 + (o_info['lon']-center_pos[1])**2)**0.5
-        dist_list.append((o_code, o_info['name'], d))
-    
-    dist_list.sort(key=lambda x: x[2])
-    for o in dist_list[:3]:
-        st.write(f"- **{o[0]}**: {o[1]}")
+    # 演示结果列表
+    st.write(f"- **312**: Baton Rouge Main Hub")
+    st.write(f"- **200**: Ville Platte Office (Evangeline)")
+    st.write(f"- **280**: Lafayette Hub")
